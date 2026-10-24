@@ -32,6 +32,15 @@ person did not ask to be offline, they only opened the app. An explicit
 disconnect keeps it offline, and keeps it that way until the person asks for
 the connection again.
 
+Every ssh the app runs is `BatchMode=yes`, with no terminal: nothing can be
+typed, so `ssh <host>` has to work without asking anything. A prompt — a
+password, a passphrase, a host key seen for the first time — is a
+`Permission denied` or a `Host key verification failed`, and the setup says
+which one in a sentence, with what ssh printed behind **Details**
+(`src/keyRead.ts`). The host commands reuse a `ControlMaster` connection if
+`~/.ssh/config` sets one up; the tunnel never does (`ControlPath=none`), so it
+does not outlive the app that opened it.
+
 In `local` mode there is no tunnel to open and none to miss.
 
 ## The API
