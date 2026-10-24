@@ -51,6 +51,7 @@ it, which is the normal state of a fresh install.
 | `src/conversations.ts` | reading a conversation back out of the sessions |
 | `src/turns.ts` | the rules of a turn: tapbacks, quota, a server still installing |
 | `src/updates.ts` | what an update means, in words |
+| `src/keyRead.ts` | a key that could not be read, in words: the sentence, what to try, and ssh's output aside |
 | `src/components/UpdateButton.tsx` | the next version, in the round face at the foot of the sidebar |
 | `src/connectors.ts` | the connectors of the host: how they are read, and how they are named |
 | `src/modelPrefs.tsx` | what the person chose, and where it is kept |
