@@ -29,6 +29,14 @@ follow [semantic versioning](https://semver.org/).
 
 ### Fixed
 
+- **The setup that dead-ended without a key.** The app talks to Hermes' API
+  server, which is off by default, and a Hermes installed by its desktop app
+  has no `API_SERVER_KEY`. The setup now says so, and gives the two lines for
+  `~/.hermes/.env` and the gateway restart, on the host or on this Mac. When
+  ssh refuses, it says why — the app cannot answer a prompt — and the command
+  to try in a terminal, with what ssh printed behind **Details** instead of as
+  the message. A saved host is busy while its key is read, the other hosts
+  wait, and "Reading…" is no longer shown next to the last error.
 - **The connectors that never finished loading.** The page asked the host
   once per page that wanted it — the dock at launch, the page when it opened,
   and twice more while a dev build settles — and each ask booted Python on the

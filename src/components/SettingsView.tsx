@@ -10,6 +10,7 @@ import { ModelsSettings } from './ModelsSettings';
 import { SkillsSettings } from './SkillsSettings';
 import { ToolsetsSettings } from './ToolsetsSettings';
 import { UpdatesSettings } from './UpdatesSettings';
+import { describeKeyRead } from '../keyRead';
 
 /** The pages of the settings. */
 export type Section =
@@ -226,7 +227,7 @@ export function SettingsView({
         .importKey({ mode: at })
         .catch((reason: Error) => ({ ok: false, error: reason.message }));
       if (!imported.ok) {
-        setError(imported.error ?? 'Could not read the key from this Mac');
+        setError(describeKeyRead(imported, { mode: at }).sentence);
         setBusy(null);
         return;
       }
@@ -289,7 +290,9 @@ export function SettingsView({
         .importKey({ mode: at, sshHost: name })
         .catch((reason: Error) => ({ ok: false, error: reason.message }));
       if (!imported.ok) {
-        setError(imported.error ?? `Could not read the key from ${name}`);
+        setError(
+          describeKeyRead(imported, { mode: at, host: name }).sentence,
+        );
         setBusy(null);
         return;
       }
@@ -312,7 +315,7 @@ export function SettingsView({
       setApiKey('');
       setNotice(`Key imported from ${host || 'the server'}.`);
     } else {
-      setError(result.error ?? 'Could not read the key from the server');
+      setError(describeKeyRead(result, { mode, host }).sentence);
     }
     setBusy(null);
   }
@@ -637,7 +640,8 @@ export function SettingsView({
                     ) : (
                       <p className="settings-key-guide">
                         No key to paste — the app reads API_SERVER_KEY from
-                        ~/.hermes/.env on its own.
+                        ~/.hermes/.env, where Hermes writes it once its API
+                        server is turned on.
                       </p>
                     )
                   ) : (

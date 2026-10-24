@@ -208,7 +208,8 @@ describe('the setup', () => {
     makeBridge({
       importKey: vi.fn(async () => ({
         ok: false,
-        error: 'API_SERVER_KEY not found in the remote ~/.hermes/.env',
+        reason: 'missing',
+        error: 'API_SERVER_KEY not found in ~/.hermes/.env',
       })),
     });
     renderSetup();
@@ -217,10 +218,154 @@ describe('the setup', () => {
       await screen.findByRole('button', { name: /jetson/ }),
     );
     expect(
-      await screen.findByText(/API_SERVER_KEY not found/),
+      await screen.findByText('No API_SERVER_KEY in ~/.hermes/.env on jetson.'),
     ).toBeTruthy();
     // The field is the asking: the key goes there.
     expect(screen.getByLabelText('API key')).toBeTruthy();
+  });
+
+  it('says the API server is off, and how to turn it on', async () => {
+    const bridge = makeBridge({
+      importKey: vi.fn(async () => ({
+        ok: false,
+        reason: 'missing',
+        error: 'API_SERVER_KEY not found in ~/.hermes/.env',
+      })),
+    });
+    const { container } = renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /jetson/ }),
+    );
+    expect(
+      await screen.findByText(
+        /Hermes Bot talks to Hermes' API server, which is off by default/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('In a terminal on jetson:')).toBeTruthy();
+    const commands = container.querySelector('.onboarding-trouble-commands');
+    expect(commands?.textContent).toContain(
+      "echo 'API_SERVER_ENABLED=true' >> ~/.hermes/.env",
+    );
+    expect(commands?.textContent).toContain(
+      'echo "API_SERVER_KEY=$(openssl rand -hex 32)" >> ~/.hermes/.env',
+    );
+    expect(commands?.textContent).toContain('hermes gateway restart');
+    // Nothing raw to show: the toggle is not there.
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+    // Trying again is reading the key again, from the same host.
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(bridge.importKey).toHaveBeenCalledTimes(2));
+    expect(bridge.importKey).toHaveBeenLastCalledWith({
+      mode: 'ssh',
+      sshHost: 'jetson',
+    });
+    expect(bridge.test).not.toHaveBeenCalled();
+  });
+
+  it('says why ssh refused, and keeps what it printed behind Details', async () => {
+    const stderr = [
+      'sign_and_send_pubkey: signing failed for ED25519-SK "/Users/me/.ssh/id_ed25519_sk": device not found',
+      'me@jetson: Permission denied (publickey).',
+    ].join('\n');
+    makeBridge({
+      importKey: vi.fn(async () => ({
+        ok: false,
+        reason: 'failed',
+        error: 'The key could not be read from the host.',
+        details: stderr,
+      })),
+    });
+    const { container } = renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /jetson/ }),
+    );
+    expect(
+      await screen.findByText('jetson did not let the app in.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/ssh jetson has to work in a terminal without asking/),
+    ).toBeTruthy();
+    expect(screen.getByText('Try it in a terminal:')).toBeTruthy();
+    expect(
+      container.querySelector('.onboarding-trouble-commands')?.textContent,
+    ).toBe('ssh jetson');
+    // The raw output is not the message.
+    expect(screen.queryByText(/sign_and_send_pubkey/)).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Details' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await userEvent.click(toggle);
+    expect(
+      container.querySelector('.onboarding-trouble-details')?.textContent,
+    ).toBe(stderr);
+    const hide = screen.getByRole('button', { name: 'Hide details' });
+    expect(hide.getAttribute('aria-expanded')).toBe('true');
+    await userEvent.click(hide);
+    expect(container.querySelector('.onboarding-trouble-details')).toBeNull();
+  });
+
+  it('says up front that ssh must work without asking anything', async () => {
+    makeBridge();
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    expect(screen.getByText('ssh <host>')).toBeTruthy();
+    expect(
+      screen.getByText(/must work in a\s+terminal without asking anything/),
+    ).toBeTruthy();
+    await userEvent.type(screen.getByLabelText('SSH host'), 'jetson');
+    expect(screen.getByText('ssh jetson')).toBeTruthy();
+  });
+
+  it('is busy while a saved host is read, and holds the others back', async () => {
+    let answer: (value: { ok: boolean; keyLength?: number }) => void = () =>
+      undefined;
+    const bridge = makeBridge({
+      importKey: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      ),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    const jetson = await screen.findByRole('button', { name: /jetson/ });
+    await userEvent.click(jetson);
+    expect(within(jetson).getByText('Reading the key…')).toBeTruthy();
+    expect(jetson.getAttribute('aria-busy')).toBe('true');
+    const labBox = screen.getByRole('button', { name: /lab-box/ });
+    expect((labBox as HTMLButtonElement).disabled).toBe(true);
+    expect(labBox.getAttribute('aria-busy')).toBe('false');
+    await userEvent.click(labBox);
+    expect(bridge.importKey).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('button', { name: 'Reading the key…' }),
+    ).toBeTruthy();
+    await act(async () => answer({ ok: true, keyLength: 64 }));
+    expect(await screen.findByText(/Hermes 0\.21\.5/)).toBeTruthy();
+    expect(within(jetson).getByText('Connected')).toBeTruthy();
+    expect((labBox as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('frees the hosts again when the read fails', async () => {
+    makeBridge({
+      importKey: vi.fn(async () => ({
+        ok: false,
+        reason: 'failed',
+        details: 'ssh: connect to host jetson port 22: Operation timed out',
+      })),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /jetson/ }),
+    );
+    expect(
+      await screen.findByText('jetson did not answer on SSH.'),
+    ).toBeTruthy();
+    const labBox = screen.getByRole('button', { name: /lab-box/ });
+    expect((labBox as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('says when no host is saved, and keeps the one to type', async () => {
@@ -299,6 +444,7 @@ describe('the setup', () => {
     makeBridge({
       importKey: vi.fn(async () => ({
         ok: false,
+        reason: 'missing',
         error: 'API_SERVER_KEY not found in ~/.hermes/.env',
       })),
     });
@@ -306,14 +452,29 @@ describe('the setup', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
     await chooseMode('local');
     expect(
-      await screen.findByText(/API_SERVER_KEY not found/),
+      await screen.findByText('No API_SERVER_KEY in ~/.hermes/.env on this Mac.'),
     ).toBeTruthy();
+    expect(
+      screen.getByText(/Hermes' API server, which is off by default/),
+    ).toBeTruthy();
+    expect(screen.getByText('In a terminal on this Mac:')).toBeTruthy();
     // Nothing is asked to be pasted: the words only say where the app
-    // will find a key once Hermes is set up.
+    // will find a key once Hermes is set up — and no longer that it reads
+    // one "on its own" while the page says there is none.
     expect(screen.queryByLabelText('API key')).toBeNull();
     expect(
       await screen.findByText(/API_SERVER_KEY from ~\/\.hermes\/\.env/),
     ).toBeTruthy();
+    expect(
+      screen.getByText(/once its API server\s+is turned on/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/on its own/)).toBeNull();
+    // The scan is over: the page is not busy any more.
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 
   it('scans again when the person asks for it', async () => {
@@ -525,8 +686,68 @@ describe('the setup', () => {
       screen.getByRole('button', { name: /Read it from hermes-box.local/ }),
     );
     expect(
-      await screen.findByText(/API_SERVER_KEY not found/),
+      await screen.findByText(
+        'No API_SERVER_KEY in ~/.hermes/.env on hermes-box.local.',
+      ),
     ).toBeTruthy();
+  });
+
+  it('never shows "Reading…" next to the last error', async () => {
+    let answer: (value: { ok: boolean; keyLength?: number }) => void = () =>
+      undefined;
+    makeBridge({
+      importKey: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          reason: 'failed',
+          details: 'me@hermes-box.local: Permission denied (publickey).',
+        })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        ),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.type(screen.getByLabelText('SSH host'), 'hermes-box.local');
+    const read = screen.getByRole('button', {
+      name: /Read it from hermes-box.local/,
+    });
+    await userEvent.click(read);
+    expect(
+      await screen.findByText('hermes-box.local did not let the app in.'),
+    ).toBeTruthy();
+    expect(read.textContent).toBe('Read it from hermes-box.local');
+    // The second read: the button says it is reading, and the error of
+    // the first one is gone.
+    await userEvent.click(read);
+    expect(read.textContent).toBe('Reading…');
+    expect(
+      screen.queryByText('hermes-box.local did not let the app in.'),
+    ).toBeNull();
+    await act(async () => answer({ ok: true, keyLength: 64 }));
+    expect(read.textContent).toBe('Read it from hermes-box.local');
+    expect(await screen.findByText(/Read from hermes-box.local/)).toBeTruthy();
+  });
+
+  it('says what went wrong when the bridge itself throws', async () => {
+    makeBridge({
+      importKey: vi.fn(() => {
+        throw new Error('The bridge is gone');
+      }),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.type(screen.getByLabelText('SSH host'), 'hermes-box.local');
+    const read = screen.getByRole('button', {
+      name: /Read it from hermes-box.local/,
+    });
+    await userEvent.click(read);
+    expect(await screen.findByText('The bridge is gone')).toBeTruthy();
+    expect(read.textContent).toBe('Read it from hermes-box.local');
   });
 
   it('does not show the bots the host already serves', async () => {

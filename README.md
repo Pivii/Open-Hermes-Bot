@@ -77,6 +77,28 @@ run?**
   `~/.hermes/.env` over the SSH it already uses. The key stays in the login
   Keychain, under the app's own entry.
 
+Either way, the key only exists once **Hermes' API server is turned on** —
+the app talks to it, and it is off by default (the official desktop app does
+not need it). If the setup says there is no `API_SERVER_KEY`, add the two
+lines on the machine that runs Hermes, then restart the gateway so it reads
+them:
+
+```bash
+echo 'API_SERVER_ENABLED=true' >> ~/.hermes/.env
+echo "API_SERVER_KEY=$(openssl rand -hex 32)" >> ~/.hermes/.env
+hermes gateway restart
+```
+
+On another machine, **`ssh <host>` must work in a terminal without asking
+anything**: the app runs ssh without a terminal (`BatchMode=yes`), so a
+password, a key passphrase that is not in the agent, a first-time host-key
+question or a security key that wants a touch all end in `Permission
+denied`. With a security key (`ed25519-sk`, YubiKey), a shared connection
+helps: `ControlMaster auto` and `ControlPersist 10m` under the host in
+`~/.ssh/config`, then `ssh <host>` once by hand — the commands the app runs
+on the host, reading the key among them, go through that connection. The
+tunnel opens one of its own.
+
 Then it shakes hands: the app reaches Hermes, asks it which bots exist, and
 shows them. Nothing else is needed: no account, no cloud, no key typed by
 hand. The setup can be run again from **Settings → Setup**, whenever Hermes

@@ -171,7 +171,8 @@ describe('the settings', () => {
       sshHosts: vi.fn(async () => ({ ok: true, hosts: ['jetson'] })),
       importKey: vi.fn(async () => ({
         ok: false,
-        error: 'API_SERVER_KEY not found in the remote ~/.hermes/.env',
+        reason: 'missing',
+        error: 'API_SERVER_KEY not found in ~/.hermes/.env',
       })),
       saveSettings: vi.fn(async () => ({ ok: true })),
       test: vi.fn(),
@@ -188,10 +189,49 @@ describe('the settings', () => {
       await screen.findByRole('button', { name: /jetson/ }),
     );
     expect(
-      await screen.findByText(/API_SERVER_KEY not found/),
+      await screen.findByText('No API_SERVER_KEY in ~/.hermes/.env on jetson.'),
     ).toBeTruthy();
     // Nothing was written down: the click only asked for the key.
     expect(bridge.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('say in a sentence why the saved host refused, not what ssh printed', async () => {
+    const bridge = {
+      getSettings: vi.fn(async () => ({
+        mode: 'ssh',
+        configured: true,
+        sshHost: 'my-host',
+        apiPort: 8642,
+        localPort: 18742,
+        autoConnect: true,
+        hasKey: false,
+      })),
+      sshHosts: vi.fn(async () => ({ ok: true, hosts: ['jetson'] })),
+      importKey: vi.fn(async () => ({
+        ok: false,
+        reason: 'failed',
+        error: 'The key could not be read from the host.',
+        details:
+          'sign_and_send_pubkey: signing failed for ED25519-SK\nme@jetson: Permission denied (publickey).',
+      })),
+      saveSettings: vi.fn(async () => ({ ok: true })),
+      test: vi.fn(),
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      models: vi.fn(async () => ({ ok: true, models: [] })),
+      profiles: vi.fn(async () => ({ ok: true, profiles: [] })),
+      prefs: vi.fn(async () => ({ ok: true, prefs: {} })),
+      savePrefs: vi.fn(async () => ({ ok: true })),
+    };
+    (window as unknown as { hermes: unknown }).hermes = bridge;
+    renderSettings();
+    await userEvent.click(
+      await screen.findByRole('button', { name: /jetson/ }),
+    );
+    expect(
+      await screen.findByText('jetson did not let the app in.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/sign_and_send_pubkey/)).toBeNull();
   });
 
   it('say when no host is saved', async () => {
@@ -417,6 +457,7 @@ describe('the settings', () => {
       })),
       importKey: vi.fn(async () => ({
         ok: false,
+        reason: 'missing',
         error: 'API_SERVER_KEY not found in ~/.hermes/.env',
       })),
       saveSettings: vi.fn(),
@@ -435,7 +476,7 @@ describe('the settings', () => {
     );
     await userEvent.click(screen.getByText(/Scan & connect/));
     expect(
-      await screen.findByText(/API_SERVER_KEY not found/),
+      await screen.findByText('No API_SERVER_KEY in ~/.hermes/.env on this Mac.'),
     ).toBeTruthy();
     // Nothing was written down: the scan was the only ask.
     expect(bridge.saveSettings).not.toHaveBeenCalled();
@@ -445,6 +486,7 @@ describe('the settings', () => {
     expect(
       screen.getByText(/API_SERVER_KEY from ~\/\.hermes\/\.env/),
     ).toBeTruthy();
+    expect(screen.queryByText(/on its own/)).toBeNull();
   });
 
   it('say when the connection failed', () => {

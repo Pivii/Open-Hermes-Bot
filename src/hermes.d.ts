@@ -434,7 +434,19 @@ export type HermesBridge = {
     /** Where Hermes runs. */
     mode?: HermesConnectionMode;
     sshHost?: string;
-  }) => Promise<{ ok: boolean; error?: string; keyLength?: number }>;
+  }) => Promise<{
+    ok: boolean;
+    /**
+     * Why the key was not read: the command did not run (`failed`), or it
+     * ran and `~/.hermes/.env` has no key (`missing`).
+     */
+    reason?: 'failed' | 'missing';
+    /** A line of the shell's own; `src/keyRead.ts` says it better. */
+    error?: string;
+    /** What the command printed, untouched — for the Details toggle. */
+    details?: string;
+    keyLength?: number;
+  }>;
   /**
    * The hosts the person's `~/.ssh/config` already names, the way the setup
    * calls them — a machine the person does not have to name twice.

@@ -7,6 +7,7 @@ import { BLOUB_SHAPES, type BloubShape } from './components/bloubFrames';
 import { toProfileId } from './components/CreateAgentDialog';
 import { avatarColor, profileColor } from './profileColor';
 import type { MoodId } from './moods';
+import { describeKeyRead, type KeyReadTrouble } from './keyRead';
 
 /**
  * The setup: the door the person walks through the first time the app opens.
@@ -198,6 +199,11 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
     'none',
   );
   const [error, setError] = useState('');
+  // What is known about a key that could not be read: the why, the command
+  // to try, the raw output. It is shown only while its sentence is the error
+  // on the page, so an error that replaces it never wears its details.
+  const [trouble, setTrouble] = useState<KeyReadTrouble | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
   const [notice, setNotice] = useState('');
   /** A notice is good news by default; this one is only worth knowing. */
   const [noticeWarn, setNoticeWarn] = useState(false);
@@ -402,9 +408,15 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
   const importFor = useCallback(
     async (at: HermesConnectionMode, where: string): Promise<boolean> => {
       if (!bridge?.importKey) return false;
-      const result = await bridge
-        .importKey({ mode: at, sshHost: where })
-        .catch((reason: Error) => ({ ok: false, error: reason.message }));
+      let result: Awaited<ReturnType<typeof bridge.importKey>>;
+      try {
+        result = await bridge.importKey({ mode: at, sshHost: where });
+      } catch (reason) {
+        result = {
+          ok: false,
+          error: reason instanceof Error ? reason.message : undefined,
+        };
+      }
       if (result.ok) {
         setHasKey(true);
         setApiKey('');
@@ -416,17 +428,35 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
         );
         return true;
       }
-      setError(result.error ?? 'The key could not be read from the server.');
+      // A sentence, not what ssh printed: the raw output waits behind the
+      // Details toggle.
+      const next = describeKeyRead(result, { mode: at, host: where });
+      setTrouble(next);
+      setShowDetails(false);
+      setError(next.sentence);
       return false;
     },
     [bridge],
   );
 
+  /**
+   * A read starts clean: what the last one said is gone before the button
+   * says "Reading…", so the two are never on the page together.
+   */
+  function startRead() {
+    setBusy('import');
+    setError('');
+    setNotice('');
+  }
+
   async function handleImport() {
     if (busy !== 'none') return;
-    setBusy('import');
-    await importFor(mode, host);
-    setBusy('none');
+    startRead();
+    try {
+      await importFor(mode, host);
+    } finally {
+      setBusy('none');
+    }
   }
 
   /**
@@ -437,7 +467,13 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
   const scanLocal = useCallback(async () => {
     if (!bridge?.test || busy !== 'none') return;
     if (!hasKey && !apiKey.trim()) {
-      const imported = await importFor('local', '');
+      startRead();
+      let imported = false;
+      try {
+        imported = await importFor('local', '');
+      } finally {
+        if (!imported) setBusy('none');
+      }
       if (!imported) return;
     }
     await runHandshake({ mode: 'local' });
@@ -447,20 +483,30 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
    * A saved host is one click. The host is named, the key is read from the
    * machine itself — or the person is asked for it — and the connection
    * opens on its own. What used to be three fields and a button.
+   *
+   * The read can take ten seconds on a host that does not answer: the page
+   * is busy the whole time, the host says what it is doing, and the other
+   * hosts wait their turn.
    */
   const pickSavedHost = useCallback(
     async (name: string) => {
-      if (busy !== 'none') return;
+      if (!bridge?.test || busy !== 'none') return;
       setHost(name);
       setError('');
       setNotice('');
       if (!hasKey && !apiKey.trim()) {
-        const imported = await importFor('ssh', name);
+        startRead();
+        let imported = false;
+        try {
+          imported = await importFor('ssh', name);
+        } finally {
+          if (!imported) setBusy('none');
+        }
         if (!imported) return;
       }
       await runHandshake({ mode: 'ssh', host: name });
     },
-    [apiKey, busy, hasKey, importFor, runHandshake],
+    [apiKey, bridge, busy, hasKey, importFor, runHandshake],
   );
 
   // The scan is what being asked for this Mac costs: nothing. Once the
@@ -703,6 +749,10 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
           localPort || '18742'
         }:127.0.0.1:${apiPort || '8642'} ${host || '<host>'}`;
 
+  // The trouble of a key read, while its sentence is the one on the page.
+  const shownTrouble =
+    trouble && error === trouble.sentence ? trouble : null;
+
   // The actor reacts to what happens: it walks the comet while the tunnel
   // opens, it asks for the look when the host refuses, and it bursts into
   // the celebration when the two of them are talking. These are the plugin's
@@ -711,7 +761,7 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
     if (step !== 'setup') return 'idle';
     if (failed) return 'interaction';
     if (connected) return 'completed';
-    if (busy === 'handshake') return 'running';
+    if (busy === 'handshake' || busy === 'import') return 'running';
     return 'idle';
   }, [busy, connected, failed, step]);
 
@@ -957,6 +1007,14 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 </label>
               </fieldset>
 
+              {mode === 'ssh' ? (
+                <p className="onboarding-key-guide">
+                  <code>ssh {host.trim() || '<host>'}</code> must work in a
+                  terminal without asking anything: the app cannot type a
+                  password or a passphrase.
+                </p>
+              ) : null}
+
               {mode === 'ssh' && savedHosts === null ? (
                 <p className="onboarding-hosts-hint">Reading the SSH config…</p>
               ) : null}
@@ -971,11 +1029,18 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                         host === name ? 'is-chosen' : ''
                       }`}
                       disabled={busy !== 'none'}
+                      aria-busy={busy !== 'none' && host === name}
                       onClick={() => void pickSavedHost(name)}
                     >
                       <span className="onboarding-host-name">{name}</span>
                       <span className="onboarding-host-cue">
-                        {connected && host === name ? 'Connected' : 'Connect'}
+                        {host === name && busy === 'import'
+                          ? 'Reading the key…'
+                          : host === name && busy === 'handshake'
+                            ? 'Connecting…'
+                            : connected && host === name
+                              ? 'Connected'
+                              : 'Connect'}
                       </span>
                     </button>
                   ))}
@@ -1015,7 +1080,8 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 hasKey ? null : (
                   <p className="onboarding-key-guide">
                     No key to paste — the app reads API_SERVER_KEY from
-                    ~/.hermes/.env on its own.
+                    ~/.hermes/.env, where Hermes writes it once its API server
+                    is turned on.
                   </p>
                 )
               ) : (
@@ -1140,18 +1206,56 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
               </ul>
 
               {error ? (
-                <div className="onboarding-actions">
-                  <span className="onboarding-error">{error}</span>
-                  <button
-                    type="button"
-                    className="onboarding-button is-quiet"
-                    disabled={busy !== 'none'}
-                    onClick={() =>
-                      void (mode === 'local' ? scanLocal() : runHandshake())
-                    }
-                  >
-                    Try again
-                  </button>
+                <div className="onboarding-trouble">
+                  <p className="onboarding-error">{error}</p>
+                  {shownTrouble?.why ? (
+                    <p className="onboarding-trouble-why">{shownTrouble.why}</p>
+                  ) : null}
+                  {shownTrouble?.commands ? (
+                    <>
+                      <p className="onboarding-trouble-why">
+                        {shownTrouble.lead}
+                      </p>
+                      <pre className="onboarding-trouble-commands">
+                        {shownTrouble.commands.join('\n')}
+                      </pre>
+                    </>
+                  ) : null}
+                  {shownTrouble?.details ? (
+                    <>
+                      <button
+                        type="button"
+                        className="onboarding-link onboarding-trouble-toggle"
+                        aria-expanded={showDetails}
+                        onClick={() => setShowDetails((current) => !current)}
+                      >
+                        {showDetails ? 'Hide details' : 'Details'}
+                      </button>
+                      {showDetails ? (
+                        <pre className="onboarding-trouble-details">
+                          {shownTrouble.details}
+                        </pre>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div className="onboarding-actions">
+                    <button
+                      type="button"
+                      className="onboarding-button is-quiet"
+                      disabled={busy !== 'none'}
+                      onClick={() =>
+                        void (mode === 'local'
+                          ? scanLocal()
+                          : shownTrouble
+                            ? // The key was not read: trying again is
+                              // reading it again, not a handshake without it.
+                              pickSavedHost(host)
+                            : runHandshake())
+                      }
+                    >
+                      Try again
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </>
@@ -1310,7 +1414,9 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 ? mode === 'local'
                   ? 'Scanning…'
                   : 'Connecting…'
-                : primaryLabel}
+                : busy === 'import'
+                  ? 'Reading the key…'
+                  : primaryLabel}
             </button>
           )}
         </div>
