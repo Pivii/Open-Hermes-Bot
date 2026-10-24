@@ -663,13 +663,23 @@ ipcMain.handle('hermes:key:import', async (_event, payload) => {
     { mode, sshHost: host },
     'grep -m1 -E \'^API_SERVER_KEY=\' "$HOME/.hermes/.env" 2>/dev/null | cut -d= -f2-',
   );
-  if (!result.ok || !result.stdout.trim()) {
+  // Two failures, told apart: the command did not run — ssh refused, the
+  // host did not answer — or it ran and the file has no key. What ssh
+  // printed travels as it is, aside: the window turns it into a sentence
+  // (src/keyRead.ts) and keeps the raw output behind a toggle.
+  if (!result.ok) {
     return {
       ok: false,
-      error:
-        result.error ||
-        stderrOf(result) ||
-        'API_SERVER_KEY not found in ~/.hermes/.env',
+      reason: 'failed',
+      error: result.error || 'The key could not be read from the host.',
+      details: [stderrOf(result), result.error].filter(Boolean).join('\n'),
+    };
+  }
+  if (!result.stdout.trim()) {
+    return {
+      ok: false,
+      reason: 'missing',
+      error: 'API_SERVER_KEY not found in ~/.hermes/.env',
     };
   }
   const key = parseEnvValue(result.stdout);
