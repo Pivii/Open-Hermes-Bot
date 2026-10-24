@@ -439,11 +439,24 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
     [bridge],
   );
 
+  /**
+   * A read starts clean: what the last one said is gone before the button
+   * says "Reading…", so the two are never on the page together.
+   */
+  function startRead() {
+    setBusy('import');
+    setError('');
+    setNotice('');
+  }
+
   async function handleImport() {
     if (busy !== 'none') return;
-    setBusy('import');
-    await importFor(mode, host);
-    setBusy('none');
+    startRead();
+    try {
+      await importFor(mode, host);
+    } finally {
+      setBusy('none');
+    }
   }
 
   /**
@@ -454,7 +467,13 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
   const scanLocal = useCallback(async () => {
     if (!bridge?.test || busy !== 'none') return;
     if (!hasKey && !apiKey.trim()) {
-      const imported = await importFor('local', '');
+      startRead();
+      let imported = false;
+      try {
+        imported = await importFor('local', '');
+      } finally {
+        if (!imported) setBusy('none');
+      }
       if (!imported) return;
     }
     await runHandshake({ mode: 'local' });
@@ -464,20 +483,30 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
    * A saved host is one click. The host is named, the key is read from the
    * machine itself — or the person is asked for it — and the connection
    * opens on its own. What used to be three fields and a button.
+   *
+   * The read can take ten seconds on a host that does not answer: the page
+   * is busy the whole time, the host says what it is doing, and the other
+   * hosts wait their turn.
    */
   const pickSavedHost = useCallback(
     async (name: string) => {
-      if (busy !== 'none') return;
+      if (!bridge?.test || busy !== 'none') return;
       setHost(name);
       setError('');
       setNotice('');
       if (!hasKey && !apiKey.trim()) {
-        const imported = await importFor('ssh', name);
+        startRead();
+        let imported = false;
+        try {
+          imported = await importFor('ssh', name);
+        } finally {
+          if (!imported) setBusy('none');
+        }
         if (!imported) return;
       }
       await runHandshake({ mode: 'ssh', host: name });
     },
-    [apiKey, busy, hasKey, importFor, runHandshake],
+    [apiKey, bridge, busy, hasKey, importFor, runHandshake],
   );
 
   // The scan is what being asked for this Mac costs: nothing. Once the
@@ -732,7 +761,7 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
     if (step !== 'setup') return 'idle';
     if (failed) return 'interaction';
     if (connected) return 'completed';
-    if (busy === 'handshake') return 'running';
+    if (busy === 'handshake' || busy === 'import') return 'running';
     return 'idle';
   }, [busy, connected, failed, step]);
 
@@ -1000,11 +1029,18 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                         host === name ? 'is-chosen' : ''
                       }`}
                       disabled={busy !== 'none'}
+                      aria-busy={busy !== 'none' && host === name}
                       onClick={() => void pickSavedHost(name)}
                     >
                       <span className="onboarding-host-name">{name}</span>
                       <span className="onboarding-host-cue">
-                        {connected && host === name ? 'Connected' : 'Connect'}
+                        {host === name && busy === 'import'
+                          ? 'Reading the key…'
+                          : host === name && busy === 'handshake'
+                            ? 'Connecting…'
+                            : connected && host === name
+                              ? 'Connected'
+                              : 'Connect'}
                       </span>
                     </button>
                   ))}
@@ -1378,7 +1414,9 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 ? mode === 'local'
                   ? 'Scanning…'
                   : 'Connecting…'
-                : primaryLabel}
+                : busy === 'import'
+                  ? 'Reading the key…'
+                  : primaryLabel}
             </button>
           )}
         </div>

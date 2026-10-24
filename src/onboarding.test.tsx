@@ -317,6 +317,57 @@ describe('the setup', () => {
     expect(screen.getByText('ssh jetson')).toBeTruthy();
   });
 
+  it('is busy while a saved host is read, and holds the others back', async () => {
+    let answer: (value: { ok: boolean; keyLength?: number }) => void = () =>
+      undefined;
+    const bridge = makeBridge({
+      importKey: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      ),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    const jetson = await screen.findByRole('button', { name: /jetson/ });
+    await userEvent.click(jetson);
+    expect(within(jetson).getByText('Reading the key…')).toBeTruthy();
+    expect(jetson.getAttribute('aria-busy')).toBe('true');
+    const labBox = screen.getByRole('button', { name: /lab-box/ });
+    expect((labBox as HTMLButtonElement).disabled).toBe(true);
+    expect(labBox.getAttribute('aria-busy')).toBe('false');
+    await userEvent.click(labBox);
+    expect(bridge.importKey).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('button', { name: 'Reading the key…' }),
+    ).toBeTruthy();
+    await act(async () => answer({ ok: true, keyLength: 64 }));
+    expect(await screen.findByText(/Hermes 0\.21\.5/)).toBeTruthy();
+    expect(within(jetson).getByText('Connected')).toBeTruthy();
+    expect((labBox as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('frees the hosts again when the read fails', async () => {
+    makeBridge({
+      importKey: vi.fn(async () => ({
+        ok: false,
+        reason: 'failed',
+        details: 'ssh: connect to host jetson port 22: Operation timed out',
+      })),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /jetson/ }),
+    );
+    expect(
+      await screen.findByText('jetson did not answer on SSH.'),
+    ).toBeTruthy();
+    const labBox = screen.getByRole('button', { name: /lab-box/ });
+    expect((labBox as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('says when no host is saved, and keeps the one to type', async () => {
     makeBridge({
       sshHosts: vi.fn(async () => ({ ok: true, hosts: [] })),
@@ -639,6 +690,47 @@ describe('the setup', () => {
         'No API_SERVER_KEY in ~/.hermes/.env on hermes-box.local.',
       ),
     ).toBeTruthy();
+  });
+
+  it('never shows "Reading…" next to the last error', async () => {
+    let answer: (value: { ok: boolean; keyLength?: number }) => void = () =>
+      undefined;
+    makeBridge({
+      importKey: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          reason: 'failed',
+          details: 'me@hermes-box.local: Permission denied (publickey).',
+        })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              answer = resolve;
+            }),
+        ),
+    });
+    renderSetup();
+    await userEvent.click(screen.getByRole('button', { name: 'Begin' }));
+    await userEvent.type(screen.getByLabelText('SSH host'), 'hermes-box.local');
+    const read = screen.getByRole('button', {
+      name: /Read it from hermes-box.local/,
+    });
+    await userEvent.click(read);
+    expect(
+      await screen.findByText('hermes-box.local did not let the app in.'),
+    ).toBeTruthy();
+    expect(read.textContent).toBe('Read it from hermes-box.local');
+    // The second read: the button says it is reading, and the error of
+    // the first one is gone.
+    await userEvent.click(read);
+    expect(read.textContent).toBe('Reading…');
+    expect(
+      screen.queryByText('hermes-box.local did not let the app in.'),
+    ).toBeNull();
+    await act(async () => answer({ ok: true, keyLength: 64 }));
+    expect(read.textContent).toBe('Read it from hermes-box.local');
+    expect(await screen.findByText(/Read from hermes-box.local/)).toBeTruthy();
   });
 
   it('says what went wrong when the bridge itself throws', async () => {
