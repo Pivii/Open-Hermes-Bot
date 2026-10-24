@@ -7,6 +7,7 @@ import { BLOUB_SHAPES, type BloubShape } from './components/bloubFrames';
 import { toProfileId } from './components/CreateAgentDialog';
 import { avatarColor, profileColor } from './profileColor';
 import type { MoodId } from './moods';
+import { describeKeyRead, type KeyReadTrouble } from './keyRead';
 
 /**
  * The setup: the door the person walks through the first time the app opens.
@@ -198,6 +199,11 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
     'none',
   );
   const [error, setError] = useState('');
+  // What is known about a key that could not be read: the why, the command
+  // to try, the raw output. It is shown only while its sentence is the error
+  // on the page, so an error that replaces it never wears its details.
+  const [trouble, setTrouble] = useState<KeyReadTrouble | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
   const [notice, setNotice] = useState('');
   /** A notice is good news by default; this one is only worth knowing. */
   const [noticeWarn, setNoticeWarn] = useState(false);
@@ -402,9 +408,15 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
   const importFor = useCallback(
     async (at: HermesConnectionMode, where: string): Promise<boolean> => {
       if (!bridge?.importKey) return false;
-      const result = await bridge
-        .importKey({ mode: at, sshHost: where })
-        .catch((reason: Error) => ({ ok: false, error: reason.message }));
+      let result: Awaited<ReturnType<typeof bridge.importKey>>;
+      try {
+        result = await bridge.importKey({ mode: at, sshHost: where });
+      } catch (reason) {
+        result = {
+          ok: false,
+          error: reason instanceof Error ? reason.message : undefined,
+        };
+      }
       if (result.ok) {
         setHasKey(true);
         setApiKey('');
@@ -416,7 +428,12 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
         );
         return true;
       }
-      setError(result.error ?? 'The key could not be read from the server.');
+      // A sentence, not what ssh printed: the raw output waits behind the
+      // Details toggle.
+      const next = describeKeyRead(result, { mode: at, host: where });
+      setTrouble(next);
+      setShowDetails(false);
+      setError(next.sentence);
       return false;
     },
     [bridge],
@@ -703,6 +720,10 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
           localPort || '18742'
         }:127.0.0.1:${apiPort || '8642'} ${host || '<host>'}`;
 
+  // The trouble of a key read, while its sentence is the one on the page.
+  const shownTrouble =
+    trouble && error === trouble.sentence ? trouble : null;
+
   // The actor reacts to what happens: it walks the comet while the tunnel
   // opens, it asks for the look when the host refuses, and it bursts into
   // the celebration when the two of them are talking. These are the plugin's
@@ -957,6 +978,14 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 </label>
               </fieldset>
 
+              {mode === 'ssh' ? (
+                <p className="onboarding-key-guide">
+                  <code>ssh {host.trim() || '<host>'}</code> must work in a
+                  terminal without asking anything: the app cannot type a
+                  password or a passphrase.
+                </p>
+              ) : null}
+
               {mode === 'ssh' && savedHosts === null ? (
                 <p className="onboarding-hosts-hint">Reading the SSH config…</p>
               ) : null}
@@ -1015,7 +1044,8 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
                 hasKey ? null : (
                   <p className="onboarding-key-guide">
                     No key to paste — the app reads API_SERVER_KEY from
-                    ~/.hermes/.env on its own.
+                    ~/.hermes/.env, where Hermes writes it once its API server
+                    is turned on.
                   </p>
                 )
               ) : (
@@ -1140,18 +1170,56 @@ export function Onboarding({ onFinish, onDismiss }: OnboardingProps) {
               </ul>
 
               {error ? (
-                <div className="onboarding-actions">
-                  <span className="onboarding-error">{error}</span>
-                  <button
-                    type="button"
-                    className="onboarding-button is-quiet"
-                    disabled={busy !== 'none'}
-                    onClick={() =>
-                      void (mode === 'local' ? scanLocal() : runHandshake())
-                    }
-                  >
-                    Try again
-                  </button>
+                <div className="onboarding-trouble">
+                  <p className="onboarding-error">{error}</p>
+                  {shownTrouble?.why ? (
+                    <p className="onboarding-trouble-why">{shownTrouble.why}</p>
+                  ) : null}
+                  {shownTrouble?.commands ? (
+                    <>
+                      <p className="onboarding-trouble-why">
+                        {shownTrouble.lead}
+                      </p>
+                      <pre className="onboarding-trouble-commands">
+                        {shownTrouble.commands.join('\n')}
+                      </pre>
+                    </>
+                  ) : null}
+                  {shownTrouble?.details ? (
+                    <>
+                      <button
+                        type="button"
+                        className="onboarding-link onboarding-trouble-toggle"
+                        aria-expanded={showDetails}
+                        onClick={() => setShowDetails((current) => !current)}
+                      >
+                        {showDetails ? 'Hide details' : 'Details'}
+                      </button>
+                      {showDetails ? (
+                        <pre className="onboarding-trouble-details">
+                          {shownTrouble.details}
+                        </pre>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div className="onboarding-actions">
+                    <button
+                      type="button"
+                      className="onboarding-button is-quiet"
+                      disabled={busy !== 'none'}
+                      onClick={() =>
+                        void (mode === 'local'
+                          ? scanLocal()
+                          : shownTrouble
+                            ? // The key was not read: trying again is
+                              // reading it again, not a handshake without it.
+                              pickSavedHost(host)
+                            : runHandshake())
+                      }
+                    >
+                      Try again
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </>
