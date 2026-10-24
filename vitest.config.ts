@@ -69,6 +69,14 @@ export default defineConfig({
           branches: 100,
           statements: 100,
         },
+        // What a key that could not be read means, in words: every reason
+        // ssh gives has its sentence, and none of them is the raw output.
+        'src/keyRead.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100,
+        },
         // The setup is a path, not a rule: every step of it is walked
         // through by a test, and the floor keeps it that way.
         'src/onboarding.tsx': {
